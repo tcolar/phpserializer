@@ -9,18 +9,24 @@ import(
   "errors"
   "reflect"
   "strconv"
-  "strings"
   "text/scanner"
 )
 
 // Encode / Decode serialized PHP objects from Go / Golang
 // Note that there are apparently **NO** PHP serialization format specs, so this might not be perfect.
+// Defaults to SnakeToUnderscore & UnderscoreToSnake for Name conversion, but can be replaced.
 type PhpSerializer struct{
+  EncodeNameConverter NameConverter
+  DecodeNameConverter NameConverter
 }
 
+
 // Decode serialized PHP content into target object
+// Note: Not closing the reader
 func (p PhpSerializer) Decode(reader io.Reader, v interface{}) (err error) {
-  // http://stackoverflow.com/questions/6395076/in-golang-using-reflect-how-do-you-set-the-value-of-a-struct-field
+  if p.DecodeNameConverter == nil{
+    p.DecodeNameConverter = &UnderscoreToSnake{}
+  }
   s := &scanner.Scanner{}
   s.Init(reader)
   obj := reflect.ValueOf(v)
@@ -28,7 +34,93 @@ func (p PhpSerializer) Decode(reader io.Reader, v interface{}) (err error) {
   return err
 }
 
-// #################### Internals
+func (p PhpSerializer) Encode(v interface{}, writer io.Writer) (err error) {
+  if p.EncodeNameConverter == nil{
+    p.EncodeNameConverter = &SnakeToUnderscore{}
+  }
+  return p.encode(v, writer)
+}
+
+// #################### Internals ############################################
+
+// Encode a Go object into a serialized PHP and write it to the writer
+// Note: Not closing the writer
+func (p PhpSerializer) encode(v interface{}, writer io.Writer) (err error) {
+  if p.EncodeNameConverter == nil{
+    p.EncodeNameConverter = &SnakeToUnderscore{}
+  }
+  t := reflect.TypeOf(v)
+  switch t.Kind(){
+    case reflect.Struct:
+      val := reflect.ValueOf(v)
+      err = p.encodeStruct(val , writer)
+    case reflect.Int: // TODO: are int8, int16 etc.. separate ?
+      i, _ := v.(int)
+      err = p.encodeInt(i , writer)
+    case reflect.String:
+      str, _ := v.(string)
+      err = p.encodeString(str , writer)
+    case reflect.Map:
+      val := reflect.ValueOf(v)
+      err = p.encodeMap(val , writer)
+    default:
+      return errors.New(fmt.Sprintf("Unsupported element %s - of type %s",
+                  reflect.ValueOf(v).String(),
+                  t.String()))
+  }
+  return err
+}
+
+// Encode a structure
+func (p PhpSerializer) encodeStruct(v reflect.Value, writer io.Writer) (err error) {
+  size := v.NumField()
+  p.write(writer, fmt.Sprintf("a:%d:{", size))
+  for i := 0; i < size; i++ {
+    // field name
+    fieldName := p.EncodeNameConverter.Convert(v.Type().Field(i).Name)
+    err = p.encodeString(fieldName, writer)
+    if err != nil {return err}
+    // field value
+    field := v.Field(i)
+    err = p.Encode(field.Interface(), writer)
+    if err != nil {return err}
+  }
+  err = p.write(writer, "}")
+  return err
+}
+
+// Encode a string
+func (p PhpSerializer) encodeString(str string, writer io.Writer) (err error) {
+  err = p.write(writer, fmt.Sprintf(`s:%d:"%s";`, len(str), str))
+  return err
+}
+
+// Encode an int
+func (p PhpSerializer) encodeInt(i int, writer io.Writer) (err error) {
+  err = p.write(writer, fmt.Sprintf("i:%d;", i))
+  return err
+}
+
+// Encode a map
+func (p PhpSerializer) encodeMap(v reflect.Value, writer io.Writer) (err error) {
+  size := len(v.MapKeys())
+  p.write(writer, fmt.Sprintf("a:%d:{", size))
+  for _, key := range v.MapKeys(){
+    err = p.Encode(key.Interface(), writer);
+    if err != nil {return err}
+    val := v.MapIndex(key)
+    err = p.Encode(val.Interface(), writer);
+    if err != nil {return err}
+  }
+  err = p.write(writer, "}")
+  return err
+}
+
+// write a string to the writer
+func (p PhpSerializer) write(writer io.Writer, str string) (err error) {
+  _, err = writer.Write([]byte(str))
+  return err
+}
 
 // Decode the next element found by the scanner and set value into v
 func (p PhpSerializer) decode(s *scanner.Scanner, v reflect.Value, skipVal bool) (err error) {
@@ -83,7 +175,7 @@ func (p PhpSerializer) decodeMap(s *scanner.Scanner, v reflect.Value, skipVal bo
         var k string
         k, _ = key.(string)
         if k == "" {return errors.New("Struct Key name is not a string.")}
-        target := underscoredToSnake(k)
+        target := p.DecodeNameConverter.Convert(k)
         val := v.Elem().FieldByName(target)
         if val.IsValid() {
           err = p.decode(s, val, skipVal)
@@ -157,13 +249,4 @@ func (p PhpSerializer) error(s *scanner.Scanner, msg string, lastTokenText strin
   return errors.New(msg)
 }
 
-// Convert an underscored name to a snake case name
-// ie: "this_is_an_example" -> "ThisIsAnExample"
-func underscoredToSnake(str string) string {
-  snaked := []string{""}
-  for _, part := range strings.Split(str, "_") {
-    snaked = append(snaked, strings.Title(part))
-  }
-  return strings.Join(snaked, "")
-}
 
