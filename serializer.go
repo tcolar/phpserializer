@@ -20,7 +20,6 @@ type PhpSerializer struct{
   DecodeNameConverter NameConverter
 }
 
-
 // Decode serialized PHP content into target object
 // Note: Not closing the reader
 func (p PhpSerializer) Decode(reader io.Reader, v interface{}) (err error) {
@@ -202,9 +201,10 @@ func (p PhpSerializer) decodeInt(s *scanner.Scanner, v reflect.Value, skipVal bo
   if p.decodeToken(s, "i") != nil {return err}
   if p.decodeToken(s, ":") != nil {return err}
   s.Scan(); text := s.TokenText()
-  var i int
-  i, err = strconv.Atoi(text)
+  var i int64
+  nb, err := strconv.Atoi(text)
   if err != nil {return err}
+  i = int64(nb)
   if p.decodeToken(s, ";") != nil {return err}
   if ! skipVal {v.Set(reflect.ValueOf(i))}
   return err
