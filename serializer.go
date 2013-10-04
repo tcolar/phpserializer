@@ -131,7 +131,8 @@ func (p PhpSerializer) decode(s *scanner.Scanner, v reflect.Value, skipVal bool)
       err = p.decodeString(s, v, skipVal)
     case 'a': // map / struct  TODO: can be an array/list too ?
       err = p.decodeMap(s, v, skipVal)
-    //case "d": // decimal TODO: 'd' object types (float)
+    case 'd': // decimal
+      err = p.decodeFloat(s, v, skipVal)
     //case "b": // TODO: 'b' object types (bool ??)
     //case "O": // TODO: 'O' object types
     //case "N": // TODO: 'N' object types
@@ -165,17 +166,24 @@ func (p PhpSerializer) decodeMap(s *scanner.Scanner, v reflect.Value, skipVal bo
           // Initialize to an empty map if nil
           v.Set(reflect.MakeMap(v.Type()))
         }
-        var mapVal interface{}
-        err = p.decode(s, reflect.ValueOf(&mapVal).Elem(), skipVal)
+        // Create an instance of the map value type
+        mapVal := reflect.New(v.Type().Elem()).Elem()
+        // and then decode that
+        err = p.decode(s, mapVal, skipVal)
         if err != nil {return err}
-        v.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(mapVal))
+        v.SetMapIndex(reflect.ValueOf(key), mapVal)
       } else {
         // targetting a struct
         var k string
         k, _ = key.(string)
-        if k == "" {return errors.New("Struct Key name is not a string.")}
+        if k == "" {return errors.New(fmt.Sprintf("Struct Key '%s' is not a string.", key))}
         target := p.DecodeNameConverter.Convert(k)
-        val := v.Elem().FieldByName(target)
+        var val reflect.Value
+        if v.Kind() == reflect.Struct {
+          val = v.FieldByName(target)
+        } else {
+          val = v.Elem().FieldByName(target)
+        }
         if val.IsValid() {
           err = p.decode(s, val, skipVal)
         } else {
@@ -210,12 +218,29 @@ func (p PhpSerializer) decodeInt(s *scanner.Scanner, v reflect.Value, skipVal bo
   return err
 }
 
+// Decode a float
+func (p PhpSerializer) decodeFloat(s *scanner.Scanner, v reflect.Value, skipVal bool) (err error){
+  if p.decodeToken(s, "d") != nil {return err}
+  if p.decodeToken(s, ":") != nil {return err}
+  s.Scan(); text := s.TokenText()
+  var f float64
+  nb, err := strconv.ParseFloat(text, 64)
+  if err != nil {return err}
+  f = nb
+  if p.decodeToken(s, ";") != nil {return err}
+  if ! skipVal {v.Set(reflect.ValueOf(f))}
+  return err
+}
+
 // Decode a string into v
 func (p PhpSerializer) decodeString(s *scanner.Scanner, v reflect.Value, skipVal bool) (err error){
   if p.decodeToken(s, "s") != nil {return err}
-  _, err = p.decodeSize(s)
+  size, err := p.decodeSize(s)
   if err != nil {return err}
-  s.Scan(); str := s.TokenText()
+  str := "";
+  for len(str) < size + 2{
+    str += string(s.Next())
+  }
   if str[0] != '"' || str[len(str) - 1] != '"'{
     return p.error(s, "Expected string to be surrounded by quotes !", str)
   }
