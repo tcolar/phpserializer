@@ -146,10 +146,10 @@ func (p PhpSerializer) decode(s *scanner.Scanner, v reflect.Value, skipVal bool)
 // Decode a map into v (map or struct)
 func (p PhpSerializer) decodeMap(s *scanner.Scanner, v reflect.Value, skipVal bool) (err error){
   var size int
-  if p.decodeToken(s, "a") != nil {return err}
+  if err = p.decodeToken(s, "a"); err != nil {return err}
   size, err = p.decodeSize(s)
   if err != nil {return err}
-  if p.decodeToken(s, "{") != nil {return err}
+  if err = p.decodeToken(s, "{"); err != nil {return err}
   // decode key/value pairs
   for i := 0; i != size; i++ {
     var key interface{}
@@ -206,35 +206,35 @@ func (p PhpSerializer) skipValue(s *scanner.Scanner) error {
 
 // Decode an int int v
 func (p PhpSerializer) decodeInt(s *scanner.Scanner, v reflect.Value, skipVal bool) (err error){
-  if p.decodeToken(s, "i") != nil {return err}
-  if p.decodeToken(s, ":") != nil {return err}
+  if err = p.decodeToken(s, "i"); err != nil {return err}
+  if err = p.decodeToken(s, ":"); err != nil {return err}
   s.Scan(); text := s.TokenText()
   var i int
   nb, err := strconv.Atoi(text)
   if err != nil {return err}
   i = nb
-  if p.decodeToken(s, ";") != nil {return err}
+  if err = p.decodeToken(s, ";"); err != nil {return err}
   if ! skipVal {v.Set(reflect.ValueOf(i))}
   return err
 }
 
 // Decode a float
 func (p PhpSerializer) decodeFloat(s *scanner.Scanner, v reflect.Value, skipVal bool) (err error){
-  if p.decodeToken(s, "d") != nil {return err}
-  if p.decodeToken(s, ":") != nil {return err}
+  if err = p.decodeToken(s, "d"); err != nil {return err}
+  if err = p.decodeToken(s, ":") ; err != nil {return err}
   s.Scan(); text := s.TokenText()
   var f float64
   nb, err := strconv.ParseFloat(text, 64)
   if err != nil {return err}
   f = nb
-  if p.decodeToken(s, ";") != nil {return err}
+  if err = p.decodeToken(s, ";"); err != nil {return err}
   if ! skipVal {v.Set(reflect.ValueOf(f))}
   return err
 }
 
 // Decode a string into v
 func (p PhpSerializer) decodeString(s *scanner.Scanner, v reflect.Value, skipVal bool) (err error){
-  if p.decodeToken(s, "s") != nil {return err}
+  if err = p.decodeToken(s, "s"); err != nil {return err}
   size, err := p.decodeSize(s)
   if err != nil {return err}
   str := "";
@@ -244,7 +244,7 @@ func (p PhpSerializer) decodeString(s *scanner.Scanner, v reflect.Value, skipVal
   if str[0] != '"' || str[len(str) - 1] != '"'{
     return p.error(s, "Expected string to be surrounded by quotes !", str)
   }
-  if p.decodeToken(s, ";") != nil {return err}
+  if err = p.decodeToken(s, ";"); err != nil {return err}
   str = str[1:len(str)-1]
   if ! skipVal {v.Set(reflect.ValueOf(str))}
   return err
@@ -259,11 +259,11 @@ func (p PhpSerializer) decodeToken(s *scanner.Scanner, expected string) (err err
 
 // Decode and return a size value (ex: ":12:")
 func (p PhpSerializer) decodeSize(s *scanner.Scanner) (size int, err error){
-  if p.decodeToken(s, ":") != nil {return size, err}
+  if err = p.decodeToken(s, ":"); err != nil {return size, err}
   s.Scan(); val := s.TokenText()
   size, err = strconv.Atoi(val)
   if err != nil {return size, p.error(s, err.Error(), val)}
-  if p.decodeToken(s, ":") != nil {return size, err}
+  if err = p.decodeToken(s, ":"); err != nil {return size, err}
   return size, err
 }
 
