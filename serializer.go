@@ -18,6 +18,7 @@ import (
 type PhpSerializer struct {
 	EncodeNameConverter NameConverter
 	DecodeNameConverter NameConverter
+	IgnoreCastErrors    bool // Wether to fail on type mistmatch or ignore and continue
 }
 
 // Decode serialized PHP content into target object
@@ -53,12 +54,18 @@ func (p PhpSerializer) encode(v interface{}, writer io.Writer) (err error) {
 	case reflect.Struct:
 		val := reflect.ValueOf(v)
 		err = p.encodeStruct(val, writer)
-	case reflect.Int: // TODO: are int8, int16 etc.. separate ?
+	case reflect.Int:
 		i, _ := v.(int)
 		err = p.encodeInt(i, writer)
+	case reflect.Bool:
+		b, _ := v.(bool)
+		err = p.encodeBool(b, writer)
 	case reflect.String:
 		str, _ := v.(string)
 		err = p.encodeString(str, writer)
+	case reflect.Float64:
+		b, _ := v.(float64)
+		err = p.encodeFloat64(b, writer)
 	case reflect.Map:
 		val := reflect.ValueOf(v)
 		err = p.encodeMap(val, writer)
@@ -92,9 +99,25 @@ func (p PhpSerializer) encodeStruct(v reflect.Value, writer io.Writer) (err erro
 	return err
 }
 
+// Encode a float64
+func (p PhpSerializer) encodeFloat64(f float64, writer io.Writer) (err error) {
+	err = p.write(writer, fmt.Sprintf(`d:%f;`, f))
+	return err
+}
+
 // Encode a string
 func (p PhpSerializer) encodeString(str string, writer io.Writer) (err error) {
 	err = p.write(writer, fmt.Sprintf(`s:%d:"%s";`, len(str), str))
+	return err
+}
+
+// Encode a  boolean
+func (p PhpSerializer) encodeBool(b bool, writer io.Writer) (err error) {
+	val := 0
+	if b {
+		val = 1
+	}
+	err = p.write(writer, fmt.Sprintf(`b:%d;`, val))
 	return err
 }
 
@@ -141,13 +164,59 @@ func (p PhpSerializer) decode(s *scanner.Scanner, v reflect.Value, skipVal bool)
 		err = p.decodeMap(s, v, skipVal)
 	case 'd': // decimal
 		err = p.decodeFloat(s, v, skipVal)
-	//case "b": // TODO: 'b' object types (bool ??)
-	//case "O": // TODO: 'O' object types
-	//case "N": // TODO: 'N' object types
+	case 'b': //bool
+		err = p.decodeBool(s, v, skipVal)
+	case 'N': //Null
+		err = p.decodeNull(s, v, skipVal)
+	//case "O": // TODO ... maybe .... 'O' object types
 	default:
 		s.Scan()
 		err = p.error(s, "Unexpected type %s", s.TokenText())
 	}
+	return err
+}
+
+func (p PhpSerializer) set(receiver reflect.Value, value reflect.Value) {
+	kind := value.Kind()
+	if receiver.Kind() != reflect.Interface {
+		if receiver.Kind() != kind && p.IgnoreCastErrors {
+			log.Printf("Ignoring %s, coud not cast into %s", receiver.Kind(), kind)
+			return
+		}
+	}
+	// Note: This will panic if value kind does not match receiver kind
+	receiver.Set(value)
+}
+
+// decode a boolean
+func (p PhpSerializer) decodeBool(s *scanner.Scanner, v reflect.Value, skipVal bool) (err error) {
+	if err = p.decodeToken(s, "b"); err != nil {
+		return err
+	}
+	if err = p.decodeToken(s, ":"); err != nil {
+		return err
+	}
+	s.Scan()
+	val := s.TokenText()
+	b := val == "1"
+	if err = p.decodeToken(s, ";"); err != nil {
+		return err
+	}
+	if !skipVal {
+		p.set(v, reflect.ValueOf(b))
+	}
+	return err
+}
+
+// decode a Null
+func (p PhpSerializer) decodeNull(s *scanner.Scanner, v reflect.Value, skipVal bool) (err error) {
+	if err = p.decodeToken(s, "N"); err != nil {
+		return err
+	}
+	if err = p.decodeToken(s, ";"); err != nil {
+		return err
+	}
+	// do nothing for no, could do v.SetPointer(nil) ?
 	return err
 }
 
@@ -250,7 +319,7 @@ func (p PhpSerializer) decodeInt(s *scanner.Scanner, v reflect.Value, skipVal bo
 		return err
 	}
 	if !skipVal {
-		v.Set(reflect.ValueOf(i))
+		p.set(v, reflect.ValueOf(i))
 	}
 	return err
 }
@@ -275,7 +344,7 @@ func (p PhpSerializer) decodeFloat(s *scanner.Scanner, v reflect.Value, skipVal 
 		return err
 	}
 	if !skipVal {
-		v.Set(reflect.ValueOf(f))
+		p.set(v, reflect.ValueOf(f))
 	}
 	return err
 }
@@ -301,7 +370,7 @@ func (p PhpSerializer) decodeString(s *scanner.Scanner, v reflect.Value, skipVal
 	}
 	str = str[1 : len(str)-1]
 	if !skipVal {
-		v.Set(reflect.ValueOf(str))
+		p.set(v, reflect.ValueOf(str))
 	}
 	return err
 }
@@ -310,6 +379,7 @@ func (p PhpSerializer) decodeString(s *scanner.Scanner, v reflect.Value, skipVal
 func (p PhpSerializer) decodeToken(s *scanner.Scanner, expected string) (err error) {
 	s.Scan()
 	text := s.TokenText()
+	//log.Print(text)
 	if text != expected {
 		err = p.error(s, fmt.Sprintf("Expected '%s' !", expected), text)
 	}
