@@ -260,7 +260,15 @@ func (p PhpSerializer) decodeMap(s *scanner.Scanner, v reflect.Value, skipVal bo
 				if err != nil {
 					return err
 				}
-				v.SetMapIndex(reflect.ValueOf(key), mapVal)
+				if v.Type().Key() == reflect.ValueOf(key).Type() {
+					v.SetMapIndex(reflect.ValueOf(key), mapVal)
+				} else {
+					if p.IgnoreCastErrors {
+						log.Print(fmt.Sprintf("Key '%s' did not fit map key type.", key))
+					} else {
+						return errors.New(fmt.Sprintf("Key '%s' did not fit map key type.", key))
+					}
+				}
 			} else {
 				// targetting a struct
 				var k string
